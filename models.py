@@ -27,6 +27,8 @@ class MemoryResponse(BaseModel):
     created_at: str
     last_accessed_at: Optional[str] = None
     metadata: Optional[dict] = None
+    tier: str = "hot"
+    score: Optional[float] = None
 
 
 class MemoryListResponse(BaseModel):

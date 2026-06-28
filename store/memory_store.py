@@ -106,7 +106,33 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_memories_accessed ON memories(last_accessed_at);
         CREATE INDEX IF NOT EXISTS idx_memory_tiers_tier ON memory_tiers(tier);
         CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+
+        -- FTS5 全文索引（BM25 检索）
+        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+            content,
+            memory_id UNINDEXED,
+            tokenize='unicode61'
+        );
     """)
+
+    # 重新索引所有记忆到 FTS（清空重建，确保分词一致性）
+    try:
+        c.execute("DELETE FROM memories_fts")
+        rows = c.execute("SELECT id, content FROM memories").fetchall()
+        for row in rows:
+            try:
+                fts_content = _tokenize_for_fts(row["content"])
+                rowid_val = hash(row["id"]) & 0x7FFFFFFF
+                c.execute(
+                    "INSERT INTO memories_fts (rowid, content, memory_id) VALUES (?, ?, ?)",
+                    (rowid_val, fts_content, row["id"]),
+                )
+            except Exception:
+                pass
+        conn.commit()
+        print(f"[映记] FTS 重建完成: {len(rows)} 条")
+    except Exception as e:
+        print(f"[映记] FTS 重建失败: {e}")
 
     conn.commit()
     conn.close()
@@ -197,6 +223,39 @@ def _row_to_memory(row: sqlite3.Row) -> dict:
     return mem
 
 
+def _tokenize_for_fts(text: str) -> str:
+    """
+    为 FTS5 做中文分词预处理：
+    - 中文逐字加空格（FTS5 unicode61 不认识中文词边界）
+    - 英文/数字保持原样（由 tokenizer 处理）
+    - 标点符号转为空格
+    """
+    import re
+    result = []
+    for char in text:
+        if re.match(r'[\u4e00-\u9fff\u3400-\u4dbf]', char):
+            result.append(f' {char} ')  # 中文字符前后加空格
+        elif re.match(r'[a-zA-Z0-9]', char):
+            result.append(char.lower())
+        else:
+            result.append(' ')  # 标点变空格
+    cleaned = ' '.join(result)
+    return ' '.join(cleaned.split())  # 合并空格
+
+
+def _sync_fts(memory_id: str, content: str, conn: sqlite3.Connection):
+    """同步记忆内容到 FTS5 索引"""
+    try:
+        rowid_val = hash(memory_id) & 0x7FFFFFFF
+        fts_content = _tokenize_for_fts(content)
+        conn.execute(
+            "INSERT OR REPLACE INTO memories_fts (rowid, content, memory_id) VALUES (?, ?, ?)",
+            (rowid_val, fts_content, memory_id),
+        )
+    except Exception as e:
+        print(f"[映记] FTS 同步失败 (非致命): {e}")
+
+
 def create_memory(
     content: str,
     memory_type: str = "fact",
@@ -205,7 +264,7 @@ def create_memory(
     importance: float = 0.3,
     metadata: Optional[dict] = None,
 ) -> str:
-    """创建一条记忆，同时写入 SQLite + ChromaDB"""
+    """创建一条记忆，同时写入 SQLite + ChromaDB + FTS"""
     mid = str(uuid.uuid4())
     now = _now()
     meta_json = json.dumps(metadata or {}, ensure_ascii=False)
@@ -224,6 +283,8 @@ def create_memory(
         "INSERT OR REPLACE INTO memory_tiers (memory_id, tier, updated_at) VALUES (?, 'hot', ?)",
         (mid, now),
     )
+    # 同步 FTS
+    _sync_fts(mid, content, conn)
     conn.commit()
     conn.close()
 
@@ -293,6 +354,42 @@ def search_memories(
     return [_row_to_memory(r) for r in rows]
 
 
+def search_bm25(query: str, limit: int = 20) -> list[tuple[str, float]]:
+    """
+    BM25 全文检索，返回 [(memory_id, score), ...]
+    score 越高越相关。
+    """
+    if not query or not query.strip():
+        return []
+    
+    # 使用和索引相同的分词逻辑
+    fts_query = _tokenize_for_fts(query)
+    if not fts_query:
+        return []
+    
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT memory_id, bm25(memories_fts, 0.0, 0.0) as score
+               FROM memories_fts
+               WHERE memories_fts MATCH ?
+               ORDER BY score
+               LIMIT ?""",
+            (fts_query, limit),
+        ).fetchall()
+        conn.close()
+        # bm25 返回负分（越小越相关），转为正分
+        results = []
+        for r in rows:
+            bm25_score = 1.0 / (1.0 + abs(r["score"]))
+            results.append((r["memory_id"], bm25_score))
+        return results
+    except Exception as e:
+        conn.close()
+        print(f"[映记] BM25 检索失败: {e}")
+        return []
+
+
 def recall_memories(query: str, top_k: int = 5, memory_type: Optional[str] = None) -> list[dict]:
     """智能召回：检索 + 排序 + 更新访问统计"""
     results = search_memories(query=query, memory_type=memory_type, limit=top_k)
@@ -320,6 +417,12 @@ def delete_memory(memory_id: str) -> bool:
     conn = _get_conn()
     c = conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
     deleted = c.rowcount > 0
+    if deleted:
+        try:
+            rowid_val = hash(memory_id) & 0x7FFFFFFF
+            conn.execute("DELETE FROM memories_fts WHERE rowid = ?", (rowid_val,))
+        except Exception:
+            pass
     conn.commit()
     conn.close()
 
