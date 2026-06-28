@@ -5,7 +5,7 @@
 
 import re
 from typing import Optional
-from store.memory_store import search_memories, recall_memories, search_bm25, get_memory_tier, _get_conn
+from store.memory_store import search_memories, recall_memories, search_bm25, get_memory_tier, _get_conn, get_total_memory_count
 # 延迟加载，避免 import 时就加载重排模型
 _reranker = None
 def _get_reranker():
@@ -17,6 +17,20 @@ def _get_reranker():
 
 # RRF 融合参数
 RRF_K = 60
+
+
+def _adaptive_candidate_count(top_k: int) -> int:
+    """
+    根据记忆总量自适应候选池大小。
+    小库全量覆盖，大库截断到硬上限。
+    """
+    total = get_total_memory_count()
+    if total < 100:
+        return total
+    elif total < 500:
+        return max(top_k * 4, int(total * 0.5))
+    else:
+        return max(top_k * 4, min(200, total // 5))
 
 
 def _rrf_rank(results_vector: list[str], results_bm25: list[tuple[str, float]]) -> dict[str, float]:
@@ -57,15 +71,15 @@ def retrieve(
     """
     v3 检索主入口：
     1. 向量检索 + BM25 关键词检索
-    2. RRF 融合（取 top-k*4 做候选池）
+    2. RRF 融合（候选池根据总量自适应）
     3. Cross-encoder 重排（可选，默认开启）
     4. 重要性 + 时间衰减过滤
     """
     if not query or not query.strip():
         return []
 
-    # ── 1a. 向量检索 ──
-    candidate_count = top_k * 4
+    # ── 1a. 向量检索（自适应候选池） ──
+    candidate_count = _adaptive_candidate_count(top_k)
     vec = search_memories(query=query, limit=candidate_count)
     vec_ids = [r["id"] for r in vec]
 

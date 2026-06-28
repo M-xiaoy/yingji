@@ -223,24 +223,56 @@ def _row_to_memory(row: sqlite3.Row) -> dict:
     return mem
 
 
+# 专有名词保护表：写入/检索前保留完整词不被拆分
+# 词条积累策略：手动添加 + 未来可引入 PMI 无监督检测
+PROTECTED_TERMS = [
+    # 系统/框架
+    "OpenClaw", "ChromaDB", "ComfyUI", "MusicGen", "Ollama",
+    # 模型/算法
+    "DeepSeek", "cross-encoder", "bge-reranker", "nomic-embed-text",
+    "BM25", "RRF", "FTS5", "IDF", "PMI", "eBPF",
+    # 项目
+    "映记", "溪流",
+    # AI 相关
+    "Agent", "LLM", "RAG", "API", "GPU", "CPU", "VRAM",
+]
+
+
 def _tokenize_for_fts(text: str) -> str:
     """
     为 FTS5 做中文分词预处理：
+    - 专有名词整体保留（PROTECTED_TERMS 保护表，替换为规范化形式）
     - 中文逐字加空格（FTS5 unicode61 不认识中文词边界）
-    - 英文/数字保持原样（由 tokenizer 处理）
+    - 英文字母/数字保持原样（由 FTS5 tokenizer 处理）
     - 标点符号转为空格
     """
     import re
-    result = []
-    for char in text:
-        if re.match(r'[\u4e00-\u9fff\u3400-\u4dbf]', char):
-            result.append(f' {char} ')  # 中文字符前后加空格
-        elif re.match(r'[a-zA-Z0-9]', char):
-            result.append(char.lower())
-        else:
-            result.append(' ')  # 标点变空格
-    cleaned = ' '.join(result)
-    return ' '.join(cleaned.split())  # 合并空格
+
+    # Step 1: 专有名词保护 — 按长度降序替换（长词优先匹配）
+    sorted_terms = sorted(PROTECTED_TERMS, key=len, reverse=True)
+    for term in sorted_terms:
+        # 规范化：全小写，连接符下划线，空格下划线 → FTS5 视为一个 token
+        canonical = term.lower().replace('-', '_').replace(' ', '_')
+        text = re.sub(re.escape(term), canonical, text)
+
+    # Step 2: 清洗非词字符（保留中文、英文、数字、下划线）
+    text = re.sub(r'[^\w\s\u4e00-\u9fff\u3400-\u4dbf]', ' ', text)
+
+    # Step 3: 中文逐字加空格（regex 替换，不影响已保护的非中文字段）
+    text = re.sub(r'([\u4e00-\u9fff\u3400-\u4dbf])', r' \1 ', text)
+
+    # Step 4: 标准化空白 + 整体小写
+    return ' '.join(text.lower().split())
+
+
+def get_total_memory_count() -> int:
+    """获取记忆总数（用于自适应候选池）"""
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT COUNT(*) as c FROM memories").fetchone()
+        return row["c"] if row else 0
+    finally:
+        conn.close()
 
 
 def _sync_fts(memory_id: str, content: str, conn: sqlite3.Connection):
