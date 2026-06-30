@@ -1,6 +1,10 @@
-# 映记 (Yìngjì) — Local-first Memory Layer for LLMs
+# 映记 (Yìngjì) — AI Interface Layer for Programs
 
-**映记** is a **tool-calling-based persistent memory system** for AI applications. It runs locally, exposes a REST API, and lets LLMs autonomously decide when to recall historical context.
+**映记** is an **embeddable AI interface layer** for any program.
+
+**v0.1** — Tool-calling-based persistent memory system. REST API, dual-engine persistence (SQLite + ChromaDB), hybrid retrieval, forgetting scheduler.
+
+**v0.2** — AI-to-AI conversation layer. Programs can now embed 映记 and let external AIs talk to them in natural language.
 
 > **Core philosophy**: Memory should be *available when needed, invisible when not*.  
 > No context injection. No pre-filling. The model decides.
@@ -168,10 +172,15 @@ yingji/
 │   ├── llm_extractor.py   # LLM-enhanced extraction (DeepSeek)
 │   ├── retriever.py       # Hybrid semantic + keyword retrieval
 │   ├── compactor.py       # Memory compression & dedup
-│   └── forgetting.py      # Hot → Warm → Cold lifecycle
+│   ├── forgetting.py      # Hot → Warm → Cold lifecycle
+│   └── phrase_detector.py # [v0.2] Auto phrase detection & merging
 │
 ├── api/
 │   └── routes.py          # REST API routes
+│
+├── _chat.py               # [v0.2] AI conversation layer
+├── _capability.py          # [v0.2] Capability introspection
+├── __init__.py             # [v0.2] Yingji main class (embeddable)
 │
 └── tools/
     ├── recall_tool.py     # Function calling tool definition + handler
@@ -180,19 +189,51 @@ yingji/
 
 ---
 
+## Usage (Embedded Mode, v0.2)
+
+```python
+from yingji import Yingji
+
+yj = Yingji()
+
+# AI-to-AI conversation
+reply = yj.chat("帮我查一下之前讨论过的实习计划")
+
+# Capability introspection
+cap = yj.capability()  # structured dict
+desc = yj.capability(text_mode=True)  # plain text for LLM prompt
+```
+
+## v0.2 API (HTTP Mode)
+
+| Endpoint | Method | What it does |
+|----------|--------|-------------|
+| `/api/v2/chat` | POST | AI-to-AI natural language conversation |
+| `/api/v2/capability` | GET | Program capability introspection |
+
+All v0.1 REST endpoints remain unchanged.
+
+---
+
 ## Status
 
-**v0.1.0-alpha** — Active development, dogfooding daily.
+**v0.2.0** — Active development. v0.1 memory system stable; v0.2 conversation layer in prototype.
 
+### v0.1 (stable)
 - ✅ REST API with 10+ endpoints
 - ✅ LLM-enhanced memory extraction (with rule-based fallback)
-- ✅ Hybrid retrieval (vector + keyword + importance)
+- ✅ Hybrid retrieval (vector + BM25 + RRF + Cross-encoder)
 - ✅ Forgetting scheduler (tiered memory lifecycle)
 - ✅ Function calling tool definition for any LLM
-- ✅ 14-stored-memory demo ready
-- ⬜ Desktop UI (Phase 2)
-- ⬜ Multi-user support
-- ⬜ Mobile client
+- ✅ Adaptive candidate pool
+
+### v0.2 (new)
+- ✅ AI-to-AI conversation layer (chat-based interface)
+- ✅ Program capability introspection
+- ✅ Embeddable mode (`pip install -e .` → `from yingji import Yingji`)
+- ✅ Auto phrase detection & merging (dynamic n-gram → FTS5)
+- ⬜ Dynamic service registry (currently static capability)
+- ⬜ Security confirmation refinement
 
 ---
 

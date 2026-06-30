@@ -40,3 +40,34 @@ SERVER_PORT = 8712
 
 # 记忆类型
 MEMORY_TYPES = ["fact", "preference", "decision", "topic", "question", "insight"]
+
+# ─── v0.2 新增：AI 对话层配置 ───
+
+# 程序方 AI 用什么模型做意图理解 + 回复生成
+# 可选: "ollama" (纯本地, qwen2.5:7b), "deepseek" (云端 API), "auto" (优先 ollama, 不可用则 deepseek)
+CHAT_MODEL = "auto"
+
+# Ollama 模型名（CHAT_MODEL=ollama 时生效）
+CHAT_OLLAMA_MODEL = "qwen2.5:7b"
+
+# DeepSeek 模型（CHAT_MODEL=deepseek 时生效）
+CHAT_DEEPSEEK_MODEL = "deepseek-chat"
+
+# 程序方 AI 的身份名称（在对话中自我介绍用）
+AI_NAME = "映记"
+
+# 程序方 AI 的能力描述（v1 静态声明）
+AI_DESCRIPTION = (
+    "我是映记，程序的 AI 接口层。"
+    "我能访问程序的记忆系统和知识库。"
+    "我可以检索存储的信息，也可以记录新的信息。"
+    "我不执行代码、不访问网络、不操作文件系统。"
+)
+
+# 安全等级
+# L1 = 直接放行（读取/检索）
+# L2 = 需确认（写入/修改）
+# L3 = 双重确认（删除/覆盖）
+SECURITY_LEVEL_READ = 1
+SECURITY_LEVEL_WRITE = 2
+SECURITY_LEVEL_DELETE = 3

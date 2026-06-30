@@ -23,6 +23,9 @@ from config import (
 
 import requests
 
+# 词组检测模块（v0.2）
+from engine.phrase_detector import init_phrase_table, tokenize_with_phrases
+
 # ══════════════════════════════════════════════════════════════════
 # 嵌入工具
 # ══════════════════════════════════════════════════════════════════
@@ -137,6 +140,9 @@ def init_db():
     conn.commit()
     conn.close()
 
+    # 初始化词组表（v0.2）
+    init_phrase_table()
+
 
 # ══════════════════════════════════════════════════════════════════
 # Conversation CRUD
@@ -242,8 +248,8 @@ def _tokenize_for_fts(text: str) -> str:
     """
     为 FTS5 做中文分词预处理：
     - 专有名词整体保留（PROTECTED_TERMS 保护表，替换为规范化形式）
-    - 中文逐字加空格（FTS5 unicode61 不认识中文词边界）
-    - 英文字母/数字保持原样（由 FTS5 tokenizer 处理）
+    - 中文使用动态词组检测（自动组词），词组与单字双通道共存
+    - 英文字母/数字保持原样
     - 标点符号转为空格
     """
     import re
@@ -251,15 +257,24 @@ def _tokenize_for_fts(text: str) -> str:
     # Step 1: 专有名词保护 — 按长度降序替换（长词优先匹配）
     sorted_terms = sorted(PROTECTED_TERMS, key=len, reverse=True)
     for term in sorted_terms:
-        # 规范化：全小写，连接符下划线，空格下划线 → FTS5 视为一个 token
         canonical = term.lower().replace('-', '_').replace(' ', '_')
         text = re.sub(re.escape(term), canonical, text)
 
     # Step 2: 清洗非词字符（保留中文、英文、数字、下划线）
     text = re.sub(r'[^\w\s\u4e00-\u9fff\u3400-\u4dbf]', ' ', text)
 
-    # Step 3: 中文逐字加空格（regex 替换，不影响已保护的非中文字段）
-    text = re.sub(r'([\u4e00-\u9fff\u3400-\u4dbf])', r' \1 ', text)
+    # Step 3: 词组感知分词（v0.2 新增）
+    # 替换原来的逐字拆分，用动态词组检测替代
+    # 识别中文字符序列，调用词组分词器
+    def _replace_chinese(match):
+        chinese_text = match.group(0)
+        return ' ' + tokenize_with_phrases(chinese_text) + ' '
+
+    text = re.sub(
+        r'[\u4e00-\u9fff\u3400-\u4dbf]+',
+        _replace_chinese,
+        text,
+    )
 
     # Step 4: 标准化空白 + 整体小写
     return ' '.join(text.lower().split())
