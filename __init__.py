@@ -157,9 +157,16 @@ class Yingji:
 
         # ── 构建响应 ──
         status = "error" if result.get("status") == "error" else "success"
+        # 失败时附带经验提示
+        if status == "error":
+            reply = result.get("message", "操作失败")
+            hint = result.get("experience_hint", "")
+            if hint:
+                reply += "\n" + hint
+        else:
+            reply = _format_success_reply(intent, result)
         return {
-            "reply": result.get("message", "操作完成。") if status == "error"
-                    else _format_success_reply(intent, result),
+            "reply": reply,
             "status": status,
             "intent": intent,
             "data": result,
@@ -230,10 +237,31 @@ class Yingji:
         """
         handler = get_handler(intent)
         if handler:
+            from experience_tracker import record_experience, search_related_experience, format_experience_hint
+            from datetime import datetime
+            start = datetime.now()
             try:
-                return handler(params)
+                result = handler(params)
             except Exception as e:
-                return {"status": "error", "message": str(e)}
+                result = {"status": "error", "message": str(e)}
+
+            elapsed = (datetime.now() - start).total_seconds() * 1000
+
+            # 记录本次执行经验
+            record_experience(
+                intent=intent,
+                params=params,
+                result=result,
+                duration_ms=elapsed,
+            )
+
+            # 失败时自动查历史经验
+            if result.get("status") == "error":
+                past = search_related_experience(intent, result.get("message", ""))
+                if past:
+                    result["experience_hint"] = format_experience_hint(past)
+
+            return result
         return {"status": "unknown_intent", "intent": intent}
 
     def __repr__(self):
@@ -280,6 +308,12 @@ def _format_success_reply(intent: str, result: dict) -> str:
             content = item.get("content", "")[:60]
             lines.append(f"  {i}. {content}")
         return "\n".join(lines)
+
+    # 通用 fallback：handler 自带 message/summary 时直接返回
+    if "message" in result:
+        return result["message"]
+    if "summary" in result:
+        return result["summary"]
 
     return "操作完成。"
 
